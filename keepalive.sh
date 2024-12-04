@@ -1,46 +1,15 @@
 #!/bin/bash
 
+
 installpath="$HOME"
+source ${installpath}/serv00-play/utils.sh
+
 autoUp=$1
 sendtype=$2
 TELEGRAM_TOKEN="$3"
 TELEGRAM_USERID="$4"
 WXSENDKEY="$5"
 
-#返回0表示成功， 1表示失败
-#在if条件中，0会执行，1不会执行
-checkvlessAlive() {
-  if ps aux | grep app.js | grep -v "grep"; then
-    return 0
-  else
-    return 1
-  fi
-}
-
-checkvmessAlive() {
-  local c=0
-  if ps aux | grep serv00sb | grep -v "grep" >/dev/null; then
-    c=$((c + 1))
-  fi
-
-  if ps aux | grep cloudflare | grep -v "grep" >/dev/null; then
-    c=$((c + 1))
-  fi
-
-  if [ $c -eq 2 ]; then
-    return 0
-  fi
-  return 1 # 有一个或多个进程不在运行
-
-}
-
-checknezhaAgentAlive() {
-  if ps aux | grep nezha-agent | grep -v "grep" >/dev/null; then
-    return 0
-  else
-    return 1
-  fi
-}
 
 checkHy2Alive() {
   if ps aux | grep serv00sb | grep -v "grep" >/dev/null; then
@@ -51,22 +20,6 @@ checkHy2Alive() {
 
 }
 
-checkMtgAlive() {
-  if ps aux | grep mtg | grep -v "grep" >/dev/null; then
-    return 0
-  else
-    return 1
-  fi
-}
-
-addCron() {
-  local tm=$1
-  crontab -l | grep -v "keepalive" >mycron
-  echo "*/$tm * * * * bash ${installpath}/serv00-play/keepalive.sh > /dev/null 2>&1 " >>mycron
-  crontab mycron
-  rm mycron
-
-}
 
 sendMsg() {
   local msg=$1
@@ -124,19 +77,11 @@ autoUpdate() {
     chmod +x ${installpath}/serv00-play/vless/start.sh
     chmod +x ${installpath}/serv00-play/singbox/start.sh
     chmod +x ${installpath}/serv00-play/singbox/killsing-box.sh
+    chmod +x ${installpath}/serv00-play/ssl/cronSSL.sh
   fi
   makeMsgConfig
 }
 
-stopNeZhaAgent() {
-  r=$(ps aux | grep nezha-agent | grep -v "grep" | awk '{print $2}')
-  if [ -z "$r" ]; then
-    return 0
-  else
-    kill -9 $r
-  fi
-  echo "已停掉nezha-agent!"
-}
 
 startNeZhaAgent() {
   local workedir="${installpath}/serv00-play/nezha"
@@ -182,35 +127,21 @@ startMtg() {
 
 }
 
-checkAlistAlive() {
-  if ps aux | grep alist | grep -v "grep" >/dev/null; then
-    return 0
-  else
-    return 1
-  fi
-}
-isServ00() {
-  [[ $(hostname) == *"serv00"* ]]
-}
 
 startAlist() {
-  user="$(whoami)"
-  if isServ00; then
-    domain="alist.$user.serv00.net"
-  else
-    domain="alist.$user.ct8.pl"
-  fi
-  webpath="${installpath}/domains/$domain/public_html/"
+  alistpath="${installpath}/serv00-play/alist"
 
-  if [[ -d "$webpath/data" && -e "$webpath/alist" ]]; then
-    cd $webpath
-    echo "正在启动alist..."
-    if checkAlistAlive; then
+  if [[ -d "$alistpath/data" && -e "$alistpath/alist" ]]; then
+   echo "正在启动alist..."
+    cd $alistpath
+    domain=$(jq -r ".domain" config.json)
+   
+    if checkProcAlive "alist"; then
       echo "alist已启动，请勿重复启动!"
     else
       nohup ./alist server >/dev/null 2>&1 &
       sleep 3
-      if ! checkAlistAlive; then
+      if ! checkProcAlive "alist"; then
         red "启动失败，请检查!"
         return 1
       else
@@ -222,6 +153,19 @@ startAlist() {
     return
   fi
 
+}
+
+startSunPanel(){
+  cd ${installpath}/serv00-play/sunpanel
+  cmd="nohup ./sun-panel >/dev/null 2>&1 &"
+  eval "$cmd"
+}
+
+startWebSSH(){
+  cd ${installpath}/serv00-play/webssh
+  ssh_port=$(jq -r ".port" config.json)
+  cmd="nohup ./wssh --port=$ssh_port  --fbidhttp=False --xheaders=False --encoding='utf-8' --delay=10  >/dev/null 2>&1 &"
+  eval "$cmd"
 }
 
 #main
@@ -282,15 +226,24 @@ user=$(whoami)
 for obj in "${monitor[@]}"; do
   msg=""
   #   echo "obj= $obj"
-  if [ "$obj" == "vless" ]; then
-    if ! checkvlessAlive; then
-      cd ${installpath}/serv00-play/vless
-      chmod +x ./start.sh && ./start.sh
+  if [ "$obj" == "sun-panel" ]; then
+    if ! checkProcAlive "sun-panel"; then
+      startSunPanel
       sleep 3
-      if ! checkvlessAlive; then
-        msg="vless restarted failure."
+      if ! checkProcAlive "sun-panel"; then
+        msg="sun-panel restarted failure."
       else
-        msg="vless restarted failure."
+        msg="sun-panel restarted successfully."
+      fi
+    fi
+  elif [ "$obj" == "webssh" ]; then
+    if ! checkProcAlive "wssh"; then
+      startWebSSH
+      sleep 5
+      if ! checkProcAlive "wssh"; then
+        msg="webssh restarted failure."
+      else
+        msg="webssh restarted successfully."
       fi
     fi
   elif [ "$obj" == "vmess" ]; then
@@ -340,7 +293,17 @@ for obj in "${monitor[@]}"; do
       fi
     fi
   elif [ "$obj" == "alist" ]; then
-    if ! checkAlistAlive; then
+    if ! checkProcAlive "alist"; then
+      startAlist
+      sleep 5
+      if ! checkProcAlive "alist"; then
+        msg="alist restarted failure."
+      else
+        msg="alist restarted successfully."
+      fi
+    fi
+  elif [ "$obj" == "wssh" ]; then
+    if ! checkProcAlive wssh; then
       startAlist
       sleep 5
       if ! checkAlistAlive; then
